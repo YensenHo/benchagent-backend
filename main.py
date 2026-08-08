@@ -7,7 +7,7 @@ GET  /api/eval/report/{id} → 获取报告
 import os, uuid, json, logging
 from pathlib import Path
 from datetime import datetime
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
