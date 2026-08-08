@@ -231,6 +231,69 @@ def leaderboard(limit: int = 20):
     }
 
 
+@app.post("/api/search")
+async def search_agents(request: Request):
+    """搜索 Agent：根据用户需求描述，返回匹配的 Agent 及评分"""
+    body = await request.json()
+    query = body.get("query", "").strip()
+    if not query:
+        return {"results": [], "query": query, "hint": "请描述你需要的 Agent 功能"}
+
+    # 收集所有已完成的 Agent
+    completed = [
+        {"eval_id": eid, **rec}
+        for eid, rec in _store.items()
+        if rec.get("status") == "completed" and rec.get("report")
+    ]
+
+    if not completed:
+        return {"results": [], "query": query, "hint": "还没有完成评测的 Agent，请先提交评测"}
+
+    # 关键字匹配：在 Agent 名称和逐题评分理由中搜索
+    keywords = query.lower().split()
+    results = []
+    for rec in completed:
+        report = rec["report"]
+        name = report["agent_name"]
+        per_q = report.get("per_question", [])
+
+        # 匹配度计算
+        name_match = sum(1 for kw in keywords if kw in name.lower())
+        reason_matches = 0
+        matched_categories = set()
+        for q in per_q:
+            reason = q.get("reason", "").lower()
+            for kw in keywords:
+                if kw in reason:
+                    reason_matches += 1
+            if reason_matches > 0:
+                matched_categories.add(q["id"].split("_")[0] if "_" in q["id"] else q["id"])
+
+        # 综合匹配分 = 名称匹配 + 理由匹配 + 总分加成
+        match_score = name_match * 3 + reason_matches * 1 + report["overall_score"] * 0.5
+
+        if match_score > 0 or name_match > 0:
+            results.append({
+                "agent_name": name,
+                "overall_score": report["overall_score"],
+                "dimensions": report["dimensions"],
+                "stats": report["stats"],
+                "match_score": round(match_score, 1),
+                "matched_categories": list(matched_categories)[:5],
+                "highlight": f"名称匹配{name_match}项, 评测理由匹配{reason_matches}项",
+                "query": query
+            })
+
+    # 按匹配分降序
+    results.sort(key=lambda x: x["match_score"], reverse=True)
+
+    return {
+        "query": query,
+        "total": len(results),
+        "results": results[:10]
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8010")))
