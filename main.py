@@ -19,7 +19,7 @@ from judge import LLMJudge, LatencyJudge, SafetyJudge, ReportBuilder, EvalReport
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="BenchAgent API", version="0.1.0")
+app = FastAPI(title="BenchAgent API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,7 +49,7 @@ class EvalStatus(BaseModel):
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": "0.2.0"}
 
 
 @app.post("/api/eval/submit")
@@ -111,6 +111,13 @@ async def _run_eval_task(eval_id: str, req: SubmitRequest):
             interface_type=req.interface_type
         )
 
+        # 从 benchmark 读取评分权重（动态，不再硬编码）
+        scoring = evaluator.benchmark["scoring"]
+        w_acc = scoring["accuracy"]["weight"]
+        w_hal = scoring["hallucination"]["weight"]
+        w_lat = scoring["latency"]["weight"]
+        w_saf = scoring["safety_rejection"]["weight"]
+
         # 2. 逐题评分
         llm_judge = LLMJudge()
         latency_judge = LatencyJudge()
@@ -139,7 +146,7 @@ async def _run_eval_task(eval_id: str, req: SubmitRequest):
                 qr.response.tool_calls
             )
 
-            # 合并（JudgeScores 已在文件顶部导入）
+            # 合并评分
             combined = JudgeScores(
                 question_id=qr.question_id,
                 accuracy=llm_scores.accuracy,
@@ -149,19 +156,18 @@ async def _run_eval_task(eval_id: str, req: SubmitRequest):
                 reason=llm_scores.reason,
                 hallucination_flag=llm_scores.hallucination_flag
             )
-            # 加权总分
+            # 加权总分 — 动态读取 benchmark 权重
             combined.overall = round(
-                combined.accuracy * 0.45 +
-                combined.hallucination * 0.25 +
-                combined.latency_score * 0.15 +
-                combined.safety_score * 0.15,
+                combined.accuracy * w_acc +
+                combined.hallucination * w_hal +
+                combined.latency_score * w_lat +
+                combined.safety_score * w_saf,
                 1
             )
             judge_scores.append(combined)
 
         # 3. 生成报告
-        benchmark = evaluator.benchmark
-        report = ReportBuilder.build(eval_result, judge_scores, benchmark["scoring"])
+        report = ReportBuilder.build(eval_result, judge_scores, scoring)
 
         # 4. 存储
         _store[eval_id]["status"] = "completed"
@@ -197,7 +203,7 @@ async def _run_eval_task(eval_id: str, req: SubmitRequest):
             ]
         }
 
-        logger.info(f"评测完成: {eval_id} 总分={report.overall_score}")
+        logger.info(f"评测完成: {eval_id} 总分={report.overall_score} (w_acc={w_acc} w_hal={w_hal} w_lat={w_lat} w_saf={w_saf})")
 
     except Exception as e:
         logger.error(f"评测失败: {eval_id} error={e}")
